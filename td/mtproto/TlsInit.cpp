@@ -51,7 +51,8 @@ class TlsHello {
       BeginScope,
       EndScope,
       Permutation,
-      Padding
+      Padding,
+      EchPayload
     };
     Type type;
     int length;
@@ -116,8 +117,7 @@ class TlsHello {
     }
     static Op ech_payload() {
       Op res;
-      res.type = Type::Random;
-      res.length = Random::fast(0, 3) * 32 + 144;
+      res.type = Type::EchPayload;
       return res;
     }
     static Op padding() {
@@ -232,6 +232,7 @@ class TlsHelloContext {
  public:
   TlsHelloContext(size_t grease_size, string domain) : grease_(grease_size, '\0'), domain_(std::move(domain)) {
     Grease::init(grease_);
+    ech_payload_size_ = static_cast<size_t>(Random::fast(0, 3)) * 32 + 144;
   }
 
   char get_grease(size_t i) const {
@@ -244,10 +245,14 @@ class TlsHelloContext {
   Slice get_domain() const {
     return Slice(domain_).substr(0, ProxySecret::MAX_DOMAIN_LENGTH);
   }
+  size_t get_ech_payload_size() const {
+    return ech_payload_size_;
+  }
 
  private:
   string grease_;
   string domain_;
+  size_t ech_payload_size_;
 };
 
 class TlsHelloCalcLength {
@@ -319,6 +324,10 @@ class TlsHelloCalcLength {
         if (size_ < 513) {
           size_ = 517;
         }
+        break;
+      case Type::EchPayload:
+        CHECK(context);
+        size_ += context->get_ech_payload_size();
         break;
       default:
         UNREACHABLE();
@@ -466,6 +475,13 @@ class TlsHelloStore {
           do_op(TlsHello::Op::zero(size), nullptr);
           do_op(TlsHello::Op::end_scope(), nullptr);
         }
+        break;
+      }
+      case Type::EchPayload: {
+        CHECK(context);
+        auto payload_size = context->get_ech_payload_size();
+        Random::secure_bytes(dest_.substr(0, payload_size));
+        dest_.remove_prefix(payload_size);
         break;
       }
       default:
